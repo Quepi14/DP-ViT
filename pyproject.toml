@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dp-vit"
+version = "0.1.0"
+description = "Dynamic Patch Vision Transformer with ICS-based patch selection"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "torch",
+    "torchvision",
+    "numpy",
+    "spicy",
+    "Pillow",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
