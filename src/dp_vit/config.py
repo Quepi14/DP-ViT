@@ -50,11 +50,11 @@ class DPViTConfig:
         if not math.isfinite(self.dropout) or not 0 <= self.dropout < 1:
             raise ValueError("dropout must be in range [0, 1].")
 
-        @property
-        def max_position_cell(self) -> int:
-            """Maximum number of position cells."""
-            smallest_patch = min(self.patch_sizes)
-            return (self.image_size // smallest_patch) ** 2
+    @property
+    def max_position_cell(self) -> int:
+        """Maximum number of position cells."""
+        smallest_patch = min(self.patch_sizes)
+        return (self.image_size // smallest_patch) ** 2
 
 @dataclass(frozen=True)
 class ICSConfig:
@@ -72,6 +72,9 @@ class ICSConfig:
 
         if self.low_percentile >= self.high_percentile:
             raise ValueError("low_percentile must be smaller than high_percentile.")
+
+        if ( self.low_percentile != 30.0 or self.high_percentile != 70.0):
+            raise ValueError("The current ICSCalibration supports only the 30th and 70th percentile.")
 
 @dataclass(frozen=True)
 class ICSCalibration:

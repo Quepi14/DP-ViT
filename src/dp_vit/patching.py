@@ -27,7 +27,7 @@ def _extract_image_patches(
     expected_map_shape = (height // region_size, width // region_size)
     if patch_size_map.shape != expected_map_shape:
         raise ValueError(
-            f"patch_size_map must have shape (expected_map_shape),"
+            f"patch_size_map must have shape {expected_map_shape},"
             f"got {patch_size_map.shape}"
         )
 
@@ -87,10 +87,27 @@ def adaptive_collate_fn (
     if len(patch_sizes) != 3 or not (
         patch_sizes[0] < patch_sizes[1] < patch_sizes[2]
     ):
-        raise ValueError("patch_sizes must contain three value ordered smallest to largest")
+        raise ValueError(
+            "patch_sizes must contain three values ordered from smallest to largest."
+        )
+
+    if isinstance(region_size, bool) or not isinstance(region_size, int):
+        raise TypeError("region_size must be an integer.")
 
     if region_size <= 0:
-        raise ValueError("region_size must be greater thank zero.")
+        raise ValueError("region_size must be greater than zero.")
+
+    if any(
+        isinstance(size, bool) or not isinstance(size, int)
+        for size in patch_sizes
+    ):
+        raise TypeError("Each patch size must be an integer.")
+
+    if any(size <= 0 for size in patch_sizes):
+        raise ValueError("Each patch size must be greater than zero.")
+
+    if any(region_size % size != 0 for size in patch_sizes):
+        raise ValueError("region_size must be divisible by every patch size.")
 
     expected_image_shape = None
     extracted_batch = []
@@ -99,6 +116,9 @@ def adaptive_collate_fn (
     for image_tensor, patch_size_map, label in batch:
         if not isinstance(image_tensor, Tensor):
             raise TypeError("Each image tensor must be a torch.Tensor.")
+
+        if image_tensor.ndim != 3 or image_tensor.shape[0] != 3:
+            raise ValueError("Each image tensor must have shape (3, height, width) for RGB input.")
 
         if isinstance(patch_size_map, Tensor):
             patch_size_map = patch_size_map.detach().cpu().numpy()
@@ -222,7 +242,7 @@ class AdaptivePatchEmbedding(nn.Module):
             position_key = f"position_{patch_size}"
             mask_key = f"mask_{patch_size}"
 
-            if patch_key not in batch or position_key not in batch or mask_key:
+            if patch_key not in batch or position_key not in batch or mask_key not in batch:
                 raise KeyError(
                     f"Batch is missing patchig data for size {patch_size}"
                 )

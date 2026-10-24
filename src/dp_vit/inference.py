@@ -9,7 +9,7 @@ from torch import Tensor
 
 from .config import ICSCalibration
 from .ics import compute_patch_size_map_for_image
-from model import DPViT
+from .model import DPViT
 from .patching import adaptive_collate_fn
 
 def predict_tensor(

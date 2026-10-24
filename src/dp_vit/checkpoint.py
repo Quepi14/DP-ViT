@@ -45,7 +45,7 @@ def _resize_mlp_layer(
         dtype=old_linear2.weight.dtype,
     )
 
-    layer.linaer1 = new_linear1
+    layer.linear1 = new_linear1
     layer.linear2 = new_linear2
 
 def save_checkpoint(
@@ -72,7 +72,7 @@ def save_checkpoint(
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = {
-        "forward_verison": CHECKPOINT_FORMAT_VERSION,
+        "format_version": CHECKPOINT_FORMAT_VERSION,
         "model_config": asdict(model.config),
         "ics_calibration": asdict(ics_calibration),
         "class_names": class_names,

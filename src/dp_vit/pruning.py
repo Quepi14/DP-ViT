@@ -11,7 +11,7 @@ def _get_encoder_layers(model: DPViT) -> list[nn.TransformerEncoderLayer]:
     if not isinstance(model, DPViT):
         raise TypeError("model must be an instance of DPViT.")
 
-    if not isinstance(model.encoder, nn.TransformerEncoderLayer):
+    if not isinstance(model.encoder, nn.TransformerEncoder):
         raise TypeError("model.encoder must be a TransformerEncoder.")
 
     layers = list(model.encoder.layers)
@@ -82,10 +82,10 @@ def prune_mlp_by_magnitude(
     config: PruningConfig,
 ) -> tuple[DPViT, dict]:
     """
-    Prune MLP neurons with the lowest incoming-weight L1 magnitudes.
+    Prune MLP neurons with the lowest combined incoming and outgoing L1 magnitudes.
 
     Pruning is applied globally across all encoder layers. At least one
-    neuron in retained in each layer.
+    neuron is retained in each layer.
     """
     layers = _get_encoder_layers(model)
 
@@ -95,13 +95,14 @@ def prune_mlp_by_magnitude(
     total_neurons = sum(layer.linear1.out_features for layer in layers)
     target_count = int(config.target_ratio * total_neurons)
 
-    scores_by_layer = []
     ranked_neurons = []
 
     for layer_index, layer in enumerate(layers):
-        # Each score is the L1 magnitude of one neuron's incoming weights.
-        scores = layer.linear1.weight.detach().abs().sum(dim=1)
-        scores_by_layer.append(scores)
+        # Score each neuron using the combined L1 magnitudes of its incoming 
+        # and outgoing weigths.
+        incoming_scores = layer.linear1.weight.detach().abs().sum(dim=1)
+        outgoing_scores = layer.linear2.weight.detach().abs().sum(dim=0)
+        scores = incoming_scores + outgoing_scores
 
         for neuron_index, score in enumerate(scores.cpu().tolist()):
             ranked_neurons.append(
@@ -163,6 +164,7 @@ def prune_mlp_by_magnitude(
         "neurons_after": total_neurons - pruned_count,
         "mlp_widths_before": widths_before,
         "mlp_widths_after": widths_after,
+        "parameters_before": parameters_before,
         "parameters_after": parameters_after,
     }
 

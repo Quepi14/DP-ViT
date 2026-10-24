@@ -36,13 +36,13 @@ def _make_region_blocks(
     if isinstance(region_size, bool) or not isinstance(region_size, int):
         raise TypeError("region_size must be an integer.")
 
-    if region_size < 0:
+    if region_size <= 0:
         raise ValueError("region_size must be greater than zero.")
 
     height, width = image.shape
 
     if height % region_size != 0 or width % region_size != 0:
-        raise ValueError("Image height and width must be disivible by region_size.")
+        raise ValueError("Image height and width must be divisible by region_size.")
 
     rows = height // region_size
     cols = width // region_size
@@ -112,17 +112,17 @@ def compute_ics(
     return alpha * variance_map + beta * gradient_map
 
 def fit_ics_calibration(
-    validation_images: Sequence[np.ndarray],
+    calibration_images: Sequence[np.ndarray],
     region_size: int = 32,
     config: ICSConfig | None = None,
 ) -> ICSCalibration:
     """
-    Fit ICS weights and global percentile thresholds using validation images.
+    Fit ICS weights and global percentile thresholds using calibration images.
 
     All images must use the same intensity range and preprocessing convention.
     """
-    if not validation_images:
-        raise ValueError("validation_images must not be empty.")
+    if not calibration_images:
+        raise ValueError("calibration_images must not be empty.")
 
     if config is None:
         config = ICSConfig()
@@ -130,7 +130,7 @@ def fit_ics_calibration(
     all_variances = []
     all_gradients = []
 
-    for image in validation_images:
+    for image in calibration_images:
         all_variances.append(
             compute_local_variance(image, region_size).ravel()
         )
@@ -185,7 +185,7 @@ def determine_patch_size_map(
     small_mask = ics_map >= calibration.p70
 
     size_map[medium_mask] = medium_patch
-    size_map[small_mask] = small_mask
+    size_map[small_mask] = small_patch
 
     return size_map
 
