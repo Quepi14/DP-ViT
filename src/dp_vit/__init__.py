@@ -7,10 +7,11 @@ from .ics import (
     compute_patch_size_map_for_image,
     determine_patch_size_map,
     fit_ics_calibration,
+    count_patch_tokens,
 )
 from .inference import predict_tensor
 from .model import DPViT
-from .patching import AdaptivePatchEmbedding, adaptive_collate_fn
+from .patching import AdaptivePatchEmbedding, adaptive_collate_fn, get_padded_sequence_length
 from .pruning import prune_mlp_by_magnitude
 
 __all__ = [
@@ -31,4 +32,6 @@ __all__ = [
     "predict_tensor",
     "prune_mlp_by_magnitude",
     "save_checkpoint",
+    "count_patch_tokens",
+    "get_padded_sequence_length",
 ]

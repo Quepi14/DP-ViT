@@ -29,6 +29,41 @@ The patches are projected into tokens and passed to a Transformer encoder.
 After training, users can optionally apply structured magnitude-based pruning
 to the MLP layers. Pruning does not automatically fine-tune the model.
 
+## Optional ICS token budget
+
+By default, ICS calibration uses the global 30th and 70th percentiles to
+assign adaptive patch sizes. You can optionally search for global thresholds
+that keep the **average number of valid patch tokens per calibration image**
+at or below a target.
+
+This is an average over the calibration images, not a strict limit for each
+image. It also does not guarantee that the padded sequence processed by the
+encoder will be shorter than a baseline Vision Transformer.
+
+```python
+from dp_vit import ICSConfig, fit_ics_calibration
+
+target_tokens = (224 // 16) ** 2  # 196 + 1 class token or total 197 patch tokens for a 224x224 ViT with 16x16 patches
+
+ics_config = ICSConfig(
+    target_mean_tokens_per_image=target_tokens,
+    search_step=5.0,
+)
+
+ics_calibration = fit_ics_calibration(
+    calibration_images=calibration_images,
+    region_size=32,
+    config=ics_config,
+    patch_sizes=(8, 16, 32),
+)
+
+print("Selected percentiles:",
+      ics_calibration.low_percentile,
+      ics_calibration.high_percentile)
+print("Estimated valid tokens per image:",
+      ics_calibration.estimated_tokens_per_image)
+```
+
 ## Installation
 
 Clone the repository, then run this command from its root directory:

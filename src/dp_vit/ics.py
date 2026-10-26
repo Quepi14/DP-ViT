@@ -111,16 +111,70 @@ def compute_ics(
 
     return alpha * variance_map + beta * gradient_map
 
+def count_patch_tokens(
+    patch_size_map: np.ndarray,
+    region_size: int = 32,
+    patch_sizes: tuple[int, int, int] = (8, 16, 32),
+) -> int:
+    "Count the actual patch tokens represented by a region-level patch map."
+    patch_size_map = np.asarray(patch_size_map)
+
+    if patch_size_map.ndim != 2:
+        raise ValueError("patch_size_Map must be a 2D array.")
+
+    if len(patch_sizes) != 3:
+        raise ValueError("patch_sizes must contain exactly three values.")
+
+    if any(region_size % size != 0 for size in patch_sizes):
+        raise ValueError("region_size must be divisible by every patch size.")
+
+    if not np.isin(patch_size_map, patch_sizes).all():
+        raise ValueError(f"patch_size_map values must be selected from {patch_sizes}.")
+
+    return int(sum(
+        np.count_nonzero(patch_size_map == size)
+        * (region_size // size) ** 2
+        for size in patch_sizes
+    ))
+
+def _mean_tokens_for_thresholds(
+    ics_maps,
+    low_threshold: float,
+    high_threshold: float,
+    region_size: int,
+    patch_sizes: tuple[int, int, int],
+) -> float:
+    """Measure mean valid tokens per calibration image for a threshold pair."""
+    calibration = ICSCalibration(
+        alpha=1.0,
+        beta=1.0,
+        p30=low_threshold,
+        p70=high_threshold,
+    )
+
+    total_tokens = 0
+
+    for ics_map in ics_maps:
+        patch_map = determine_patch_size_map(
+            ics_map,
+            calibration,
+            patch_sizes=patch_sizes,
+        )
+        total_tokens += count_patch_tokens(
+            patch_map,
+            region_size=region_size,
+            patch_sizes=patch_sizes,
+        )
+
+    return total_tokens / len(ics_maps)
+
 def fit_ics_calibration(
-    calibration_images: Sequence[np.ndarray],
+    calibration_images,
     region_size: int = 32,
     config: ICSConfig | None = None,
+    patch_sizes: tuple[int, int, int] = (8, 16, 32),
 ) -> ICSCalibration:
-    """
-    Fit ICS weights and global percentile thresholds using calibration images.
-
-    All images must use the same intensity range and preprocessing convention.
-    """
+    """Fit global ICS thresholds, optionally targeting a mean token budget."""
     if not calibration_images:
         raise ValueError("calibration_images must not be empty.")
 
@@ -147,14 +201,110 @@ def fit_ics_calibration(
 
     all_ics = alpha * all_variances + beta * all_gradients
 
-    p30 = float(np.percentile(all_ics, config.low_percentile))
-    p70 = float(np.percentile(all_ics, config.high_percentile))
+    # Retain one ICS map for each calibration image.
+    ics_maps = []
+    offset = 0
+
+    for image in calibration_images:
+        shape = compute_local_variance(image, region_size).shape
+        count = int(np.prod(shape))
+
+        ics_maps.append(
+            all_ics[offset : offset + count].reshape(shape)
+        )
+        offset += count
+
+    selected_low = config.low_percentile
+    selected_high = config.high_percentile
+
+    # Without a target, keep the original percentile behavior.
+    if config.target_mean_tokens_per_image is None:
+        p30 = float(np.percentile(all_ics, selected_low))
+        p70 = float(np.percentile(all_ics, selected_high))
+        estimated_tokens = _mean_tokens_for_thresholds(
+            ics_maps,
+            p30,
+            p70,
+            region_size,
+            patch_sizes,
+        )
+
+    else:
+        region_counts = {ics_map.size for ics_map in ics_maps}
+
+        if len(region_counts) != 1:
+            raise ValueError(
+                "Calibration images must contain the same number of regions "
+                "when selecting a token budget."
+            )
+
+        minimum_budget = next(iter(region_counts))
+
+        if config.target_mean_tokens_per_image < minimum_budget:
+            raise ValueError(
+                f"Target token budget must be at least {minimum_budget}, "
+                "the one-token-per-region minimum."
+            )
+
+        percentiles = np.arange(
+            0.0,
+            100.0 + config.search_step * 0.5,
+            config.search_step,
+        )
+        percentiles[-1] = 100.0
+        sorted_ics = np.sort(all_ics)
+        feasible = []
+
+        for low_pct in percentiles:
+            low_threshold = float(np.percentile(sorted_ics, low_pct))
+
+            for high_pct in percentiles:
+                if high_pct <= low_pct:
+                    continue
+
+                high_threshold = float(np.percentile(sorted_ics, high_pct))
+
+                mean_tokens = _mean_tokens_for_thresholds(
+                    ics_maps,
+                    low_threshold,
+                    high_threshold,
+                    region_size,
+                    patch_sizes,
+                )
+
+                if mean_tokens <= config.target_mean_tokens_per_image:
+                    feasible.append(
+                        (
+                            mean_tokens,
+                            low_pct,
+                            high_pct,
+                            low_threshold,
+                            high_threshold,
+                        )
+                    )
+
+        if not feasible:
+            raise ValueError(
+                "No global percentile pair meets the target token budget. "
+                "Raise the target or use a smaller search_step."
+            )
+
+        (
+            estimated_tokens,
+            selected_low,
+            selected_high,
+            p30,
+            p70,
+        ) = max(feasible, key=lambda item: item[0])
 
     return ICSCalibration(
         alpha=float(alpha),
         beta=float(beta),
-        p30=p30,
-        p70=p70,
+        p30=float(p30),
+        p70=float(p70),
+        low_percentile=float(selected_low),
+        high_percentile=float(selected_high),
+        estimated_tokens_per_image=float(estimated_tokens),
     )
 
 def determine_patch_size_map(

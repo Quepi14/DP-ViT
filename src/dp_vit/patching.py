@@ -195,6 +195,34 @@ def adaptive_collate_fn (
 
     return output
 
+def get_padded_sequence_length(
+    batch: dict[str, Tensor],
+    patch_sizes: tuple[int, int, int] = (8, 16, 32),
+    include_class_token: bool = True,
+) -> int:
+    """Return encoder sequence length, including group padding and class token."""
+    sequence_length = 0
+
+    for patch_size in patch_sizes:
+        key = f"patches_{patch_size}"
+
+        if key not in batch:
+            raise KeyError(f"Batch is missing {key}.")
+
+        patches = batch[key]
+
+        if patches.ndim != 3:
+            raise ValueError(
+                f"{key} must have shape (batch, tokens, patch_dim)."
+            )
+
+        sequence_length += patches.shape[1]
+
+    if include_class_token:
+        sequence_length += 1
+
+    return sequence_length
+
 class AdaptivePatchEmbedding(nn.Module):
     """Project each supported patch size into a shared token space."""
 

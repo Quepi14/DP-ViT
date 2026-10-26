@@ -58,23 +58,48 @@ class DPViTConfig:
 
 @dataclass(frozen=True)
 class ICSConfig:
-    "Config percentile for ICS module"
+    """Configuration for global ICS thresholds and an optional token budget."""
 
     low_percentile: float = 30.0
     high_percentile: float = 70.0
 
+    # None preserves the existing fixed-percentile behavior.
+    target_mean_tokens_per_image: float | None = None
+    search_step: float = 5.0
+
     def __post_init__(self) -> None:
         if not 0 <= self.low_percentile <= 100:
-            raise ValueError("low_percentile must be in range [0, 100]")
+            raise ValueError("low_percentile must be in range [0, 100].")
 
         if not 0 <= self.high_percentile <= 100:
-            raise ValueError("high_percentile must be in range [0, 100]")
+            raise ValueError("high_percentile must be in range [0, 100].")
 
         if self.low_percentile >= self.high_percentile:
             raise ValueError("low_percentile must be smaller than high_percentile.")
 
-        if ( self.low_percentile != 30.0 or self.high_percentile != 70.0):
-            raise ValueError("The current ICSCalibration supports only the 30th and 70th percentile.")
+        if self.target_mean_tokens_per_image is not None:
+            if (
+                not math.isfinite(self.target_mean_tokens_per_image)
+                or self.target_mean_tokens_per_image <= 0
+            ):
+                raise ValueError(
+                    "target_mean_tokens_per_image must be finite and positive."
+                )
+
+        def __post_init__(self) -> None:
+        # Validasi low_percentile dan high_percentile di sini
+
+            if self.target_mean_tokens_per_image is not None:
+                if (
+                    not math.isfinite(self.target_mean_tokens_per_image)
+                    or self.target_mean_tokens_per_image <= 0
+                ):
+                    raise ValueError(
+                        "target_mean_tokens_per_image must be finite and positive."
+                    )
+
+            if not 0 < self.search_step <= 50:
+                raise ValueError("search_step must be in the range (0, 50].")
 
 @dataclass(frozen=True)
 class ICSCalibration:
@@ -84,6 +109,9 @@ class ICSCalibration:
     beta: float
     p30: float
     p70: float
+    low_percentile: float = 30.0
+    high_percentile: float = 70.0
+    estimated_tokens_per_image: float | None = None
 
     def __post_init__ (self) -> None:
         for name, value in (
