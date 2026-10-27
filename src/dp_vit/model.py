@@ -31,6 +31,7 @@ class DPViT(nn.Module):
         self.encoder = nn.TransformerEncoder(
             encoder_layer,
             num_layers=config.num_layers,
+            enable_nested_tensor=False,
         )
 
         # Initialize each encoder layer independently.
