@@ -26,11 +26,22 @@ class DPViT(nn.Module):
             dropout=config.dropout,
             activation="gelu",
             batch_first=True,
+            norm_first=True,
         )
         self.encoder = nn.TransformerEncoder(
             encoder_layer,
             num_layers=config.num_layers,
         )
+
+        # Initialize each encoder layer independently.
+        for layer in self.encoder.layers:
+            for name, parameter in layer.named_parameters():
+                if parameter.dim() > 1:
+                    nn.init.xavier_uniform_(parameter)
+                elif name.endswith("weight") and "norm" in name:
+                    nn.init.ones_(parameter)
+                else:
+                    nn.init.zeros_(parameter)
 
         self.norm = nn.LayerNorm(config.embed_dim)
         self.classifier = nn.Linear(

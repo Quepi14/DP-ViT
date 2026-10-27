@@ -70,13 +70,13 @@ class ICSConfig:
     def __post_init__(self) -> None:
         if not 0 <= self.low_percentile <= 100:
             raise ValueError("low_percentile must be in range [0, 100].")
-
+    
         if not 0 <= self.high_percentile <= 100:
             raise ValueError("high_percentile must be in range [0, 100].")
-
+    
         if self.low_percentile >= self.high_percentile:
             raise ValueError("low_percentile must be smaller than high_percentile.")
-
+    
         if self.target_mean_tokens_per_image is not None:
             if (
                 not math.isfinite(self.target_mean_tokens_per_image)
@@ -85,21 +85,9 @@ class ICSConfig:
                 raise ValueError(
                     "target_mean_tokens_per_image must be finite and positive."
                 )
-
-        def __post_init__(self) -> None:
-        # Validasi low_percentile dan high_percentile di sini
-
-            if self.target_mean_tokens_per_image is not None:
-                if (
-                    not math.isfinite(self.target_mean_tokens_per_image)
-                    or self.target_mean_tokens_per_image <= 0
-                ):
-                    raise ValueError(
-                        "target_mean_tokens_per_image must be finite and positive."
-                    )
-
-            if not 0 < self.search_step <= 50:
-                raise ValueError("search_step must be in the range (0, 50].")
+    
+        if not math.isfinite(self.search_step) or not 0 < self.search_step <= 50:
+            raise ValueError("search_step must be finite and in the range (0, 50].")
 
 @dataclass(frozen=True)
 class ICSCalibration:
