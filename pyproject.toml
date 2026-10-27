@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dp-vit"
-version = "0.1.1"
+version = "0.1.2"
 description = "Dynamic Patch Vision Transformer with ICS-based patch selection"
 readme = "README.md"
 requires-python = ">=3.11"
