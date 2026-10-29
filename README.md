@@ -177,6 +177,39 @@ The dataset samples passed to `adaptive_collate_fn` must have this structure:
 `image_tensor` must have shape `(3, height, width)`. The patch map must be
 computed from the RGB image before channel normalization.
 
+To avoid padding between images, use `TierBatchSampler` with tiers based on
+each image's token counts per patch size. A total token count alone may not
+avoid padding when the patch-size composition differs:
+
+```python
+import numpy as np
+
+from dp_vit import TierBatchSampler
+
+tier_ids = {}
+tiers = []
+for _, patch_map, _ in dataset:
+    token_counts = tuple(
+        np.count_nonzero(patch_map == size)
+        * (config.region_size // size) ** 2
+        for size in config.patch_sizes
+    )
+    tiers.append(tier_ids.setdefault(token_counts, len(tier_ids)))
+
+loader = DataLoader(
+    dataset,
+    batch_sampler=TierBatchSampler(tiers, batch_size=2, shuffle=True, seed=0),
+    collate_fn=partial(
+        adaptive_collate_fn,
+        region_size=config.region_size,
+        patch_sizes=config.patch_sizes,
+    ),
+)
+```
+
+`batch_size` is the maximum size for each tier; the final batch in a tier may
+be smaller.
+
 ## Optional pruning and checkpoint saving
 
 Apply pruning after training. Evaluate the pruned model on your validation or

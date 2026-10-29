@@ -81,6 +81,11 @@ class DPViT(nn.Module):
         )
         padding_mask = ~full_valid_mask
 
+        # With fixed-budget patch maps nothing is padded. Passing no mask lets
+        # PyTorch use its faster attention path (one small GPU sync per call).
+        if not bool(padding_mask.any()):
+            padding_mask = None
+
         encoded = self.encoder(
             tokens,
             src_key_padding_mask=padding_mask,

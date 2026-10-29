@@ -309,3 +309,96 @@ class AdaptivePatchEmbedding(nn.Module):
         all_valid_mask = torch.cat(mask_groups, dim=1)
 
         return all_tokens, all_valid_mask
+
+
+def _vectorized_group_arrays(
+    images: np.ndarray,
+    patch_maps: np.ndarray,
+    region_size: int,
+    patch_sizes: tuple[int, int, int],
+) -> dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """
+    Vectorized patch extraction for a whole batch (no Python loop per patch).
+
+    images:     (B, C, H, W)
+    patch_maps: (B, H // region_size, W // region_size)
+    Returns {patch_size: (patches (B, N, C*s*s), positions (B, N), valid (B, N))}
+    with the same padding rule as adaptive_collate_fn (pad per patch size).
+    Only the selected patches are copied.
+    """
+    batch, channels, height, width = images.shape
+    smallest = min(patch_sizes)
+    base_grid_width = width // smallest
+    result = {}
+
+    for size in patch_sizes:
+        rows, cols = height // size, width // size
+        view = images.reshape(batch, channels, rows, size, cols, size)
+
+        token_rows = np.repeat(np.arange(rows), cols)
+        token_cols = np.tile(np.arange(cols), rows)
+        region_r = token_rows * size // region_size
+        region_c = token_cols * size // region_size
+        selected = patch_maps[:, region_r, region_c] == size          # (B, rows*cols)
+
+        counts = selected.sum(axis=1)
+        max_tokens = max(int(counts.max()), 1)
+        starts = np.cumsum(counts) - counts
+
+        batch_idx, token_idx = np.nonzero(selected)                   # raster order per image
+        slot = np.arange(batch_idx.size) - starts[batch_idx]
+        row_idx, col_idx = token_rows[token_idx], token_cols[token_idx]
+
+        chosen = view[batch_idx, :, row_idx, :, col_idx, :]           # (N, C, s, s)
+
+        patches = np.zeros((batch, max_tokens, channels * size * size), dtype=images.dtype)
+        positions = np.zeros((batch, max_tokens), dtype=np.int64)
+        patches[batch_idx, slot] = chosen.reshape(batch_idx.size, -1)
+        positions[batch_idx, slot] = (row_idx * size // smallest) * base_grid_width + (col_idx * size // smallest)
+        valid = np.arange(max_tokens)[None, :] < counts[:, None]
+
+        result[size] = (patches, positions, valid)
+
+    return result
+
+
+def fast_adaptive_collate_fn(
+    batch: Sequence[tuple[Tensor, np.ndarray, int]],
+    region_size: int = 32,
+    patch_sizes: tuple[int, int, int] = (8, 16, 32),
+) -> dict[str, Tensor]:
+    """
+    Drop-in, much faster replacement for adaptive_collate_fn.
+
+    Same input samples and same output keys, but patches are extracted with
+    reshape/gather instead of a Python loop over every patch. Token ORDER inside
+    each patch-size group differs from adaptive_collate_fn; this does not change
+    model output because attention is permutation-equivariant and every token
+    carries its own position embedding.
+    """
+    if not batch:
+        raise ValueError("batch must contain at least one sample.")
+
+    images = torch.stack([sample[0] for sample in batch])
+    if images.ndim != 4 or images.shape[1] != 3:
+        raise ValueError("Each image tensor must have shape (3, height, width) for RGB input.")
+
+    _, _, height, width = images.shape
+    if height % region_size != 0 or width % region_size != 0:
+        raise ValueError("Image height and width must be divisible by region_size.")
+
+    patch_maps = np.stack([np.asarray(sample[1]) for sample in batch])
+    if patch_maps.shape[1:] != (height // region_size, width // region_size):
+        raise ValueError("patch_size_map shape does not match image / region_size.")
+    if not np.isin(patch_maps, patch_sizes).all():
+        raise ValueError(f"patch_size_map values must be selected from {patch_sizes}")
+
+    groups = _vectorized_group_arrays(images.numpy(), patch_maps, region_size, patch_sizes)
+
+    output = {"labels": torch.tensor([int(sample[2]) for sample in batch], dtype=torch.long)}
+    for size, (patches, positions, valid) in groups.items():
+        output[f"patches_{size}"] = torch.from_numpy(np.ascontiguousarray(patches)).to(images.dtype)
+        output[f"position_{size}"] = torch.from_numpy(positions).long()
+        output[f"mask_{size}"] = torch.from_numpy(valid)
+
+    return output

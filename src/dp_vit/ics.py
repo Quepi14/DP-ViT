@@ -363,3 +363,161 @@ def compute_patch_size_map_for_image(
         calibration=calibration,
         patch_sizes=patch_sizes
     )
+
+
+
+def determine_budget_patch_size_map(
+    ics_map: np.ndarray,
+    num_small: int,
+    num_medium: int,
+    patch_sizes: tuple[int, int, int] = (8, 16, 32),
+) -> np.ndarray:
+    """
+    Assign patch sizes with a FIXED number of regions per size.
+
+    The ``num_small`` regions with the highest ICS receive patch_sizes[0], the
+    next ``num_medium`` regions receive patch_sizes[1], and the rest receive
+    patch_sizes[2]. Every image therefore has exactly the same token count, so
+    batches need no padding.
+    """
+    ics_map = np.asarray(ics_map)
+    total = ics_map.size
+
+    if num_small < 0 or num_medium < 0 or num_small + num_medium > total:
+        raise ValueError("num_small and num_medium must be >= 0 and sum to <= number of regions.")
+
+    small_patch, medium_patch, large_patch = patch_sizes
+    order = np.argsort(-ics_map.ravel(), kind="stable")
+    flat = np.full(total, large_patch, dtype=np.int32)
+    flat[order[:num_small]] = small_patch
+    flat[order[num_small:num_small + num_medium]] = medium_patch
+
+    return flat.reshape(ics_map.shape)
+
+
+def compute_budget_patch_size_map_for_image(
+    image: np.ndarray,
+    calibration: ICSCalibration,
+    num_small: int,
+    num_medium: int,
+    region_size: int = 32,
+    patch_sizes: tuple[int, int, int] = (8, 16, 32),
+) -> np.ndarray:
+    """Compute an image's ICS map and convert it to a fixed-budget patch map."""
+    ics_map = compute_ics(
+        compute_local_variance(image, region_size),
+        compute_gradient_magnitude(image, region_size),
+        alpha=calibration.alpha,
+        beta=calibration.beta,
+    )
+
+    return determine_budget_patch_size_map(
+        ics_map, num_small, num_medium, patch_sizes
+    )
+
+
+DEFAULT_TIERS = ((0, 10), (2, 12), (4, 14), (6, 12))  # (num_8x8, num_16x16) per tier
+
+
+def tier_token_count(
+    num_small: int,
+    num_medium: int,
+    num_regions: int = 49,
+    region_size: int = 32,
+    patch_sizes: tuple[int, int, int] = (8, 16, 32),
+) -> int:
+    """Tokens produced by one tier: the remaining regions use the largest patch."""
+    small, medium, large = patch_sizes
+    num_large = num_regions - num_small - num_medium
+    return int(
+        num_small * (region_size // small) ** 2
+        + num_medium * (region_size // medium) ** 2
+        + num_large * (region_size // large) ** 2
+    )
+
+
+def fit_detail_threshold(
+    calibration_images,
+    calibration: ICSCalibration,
+    region_size: int = 32,
+    percentile: float = 90.0,
+) -> float:
+    """
+    ICS value above which a region is considered to NEED the smallest patches.
+
+    It is a percentile of region ICS over the calibration images. A higher
+    percentile means fewer regions qualify for the smallest patch size.
+    """
+    if not calibration_images:
+        raise ValueError("calibration_images must not be empty.")
+    if not 0 < percentile < 100:
+        raise ValueError("percentile must be in the range (0, 100).")
+
+    values = []
+    for image in calibration_images:
+        ics_map = compute_ics(
+            compute_local_variance(image, region_size),
+            compute_gradient_magnitude(image, region_size),
+            alpha=calibration.alpha,
+            beta=calibration.beta,
+        )
+        values.append(ics_map.ravel())
+
+    return float(np.percentile(np.concatenate(values), percentile))
+
+
+def determine_tiered_patch_size_map(
+    ics_map: np.ndarray,
+    detail_threshold: float,
+    tiers: Sequence[tuple[int, int]] = DEFAULT_TIERS,
+    patch_sizes: tuple[int, int, int] = (8, 16, 32),
+) -> tuple[np.ndarray, int]:
+    """
+    Adaptive patch map with a small number of fixed token budgets (tiers).
+
+    The number of regions at or above ``detail_threshold`` says how much fine
+    detail the image needs. The image gets the highest tier whose smallest-patch
+    count does not exceed that number. Inside the tier, regions are ranked by
+    ICS, so the most complex regions still receive the smallest patches.
+    Images in the same tier have identical token counts, so they need no padding
+    when they share a batch.
+
+    Returns (patch_size_map, tier_index).
+    """
+    ics_map = np.asarray(ics_map)
+    tiers = tuple((int(a), int(b)) for a, b in tiers)
+
+    if not tiers or any(tiers[i][0] >= tiers[i + 1][0] for i in range(len(tiers) - 1)):
+        raise ValueError("tiers must be non-empty and sorted by strictly increasing num_small.")
+    if any(a < 0 or b < 0 or a + b > ics_map.size for a, b in tiers):
+        raise ValueError("Each tier must satisfy num_small + num_medium <= number of regions.")
+
+    wanted = int(np.count_nonzero(ics_map >= detail_threshold))
+    tier_index = 0
+    for index, (num_small, _) in enumerate(tiers):
+        if num_small <= wanted:
+            tier_index = index
+
+    num_small, num_medium = tiers[tier_index]
+    return (
+        determine_budget_patch_size_map(ics_map, num_small, num_medium, patch_sizes),
+        tier_index,
+    )
+
+
+def compute_tiered_patch_size_map_for_image(
+    image: np.ndarray,
+    calibration: ICSCalibration,
+    detail_threshold: float,
+    tiers: Sequence[tuple[int, int]] = DEFAULT_TIERS,
+    region_size: int = 32,
+    patch_sizes: tuple[int, int, int] = (8, 16, 32),
+) -> tuple[np.ndarray, int]:
+    """Compute an image ICS map and convert it to a tiered patch map."""
+    ics_map = compute_ics(
+        compute_local_variance(image, region_size),
+        compute_gradient_magnitude(image, region_size),
+        alpha=calibration.alpha,
+        beta=calibration.beta,
+    )
+    return determine_tiered_patch_size_map(ics_map, detail_threshold, tiers, patch_sizes)
