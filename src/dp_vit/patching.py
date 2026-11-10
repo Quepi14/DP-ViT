@@ -67,6 +67,30 @@ def _extract_image_patches(
 
     return patches
 
+def get_patch_signature(
+    patch_size_map: np.ndarray,
+    region_size: int = 32,
+    patch_sizes: tuple[int, int, int] = (8, 16, 32),
+) -> tuple[int, int, int]:
+    """Calculate the number of patches for each adaptive patch size."""
+
+    patch_size_map = np.asarray(patch_size_map)
+
+    if patch_size_map.ndim != 2:
+        raise ValueError("patch_size_map must be a 2D array.")
+
+    if not np.isin(patch_size_map, patch_sizes).all():
+        raise ValueError(f"patch_size_map values must be selected from {patch_sizes}")
+
+    return (
+        int(np.count_nonzero(patch_size_map == patch_sizes[0]))
+        * (region_size // patch_sizes[0]) ** 2,
+        int(np.count_nonzero(patch_size_map == patch_sizes[1]))
+        * (region_size // patch_sizes[1]) ** 2,
+        int(np.count_nonzero(patch_size_map == patch_sizes[2]))
+        * (region_size // patch_sizes[2]) ** 2,
+    )
+
 def adaptive_collate_fn (
     batch: Sequence[tuple[Tensor, np.ndarray, int]],
     region_size: int = 32,

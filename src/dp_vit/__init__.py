@@ -1,4 +1,4 @@
-from .batching import TierBatchSampler
+from .batching import SignatureBatchSampler
 from .checkpoint import load_checkpoint, save_checkpoint
 from .config import DPViTConfig, ICSCalibration, ICSConfig, PruningConfig
 from .ics import (
@@ -19,6 +19,7 @@ from .patching import (
     adaptive_collate_fn,
     fast_adaptive_collate_fn,
     get_padded_sequence_length,
+    get_patch_signature,
 )
 from .pruning import prune_mlp_by_magnitude
 
@@ -29,7 +30,7 @@ __all__ = [
     "ICSCalibration",
     "ICSConfig",
     "PruningConfig",
-    "TierBatchSampler",
+    "SignatureBatchSampler",
     "adaptive_collate_fn",
     "compute_gradient_magnitude",
     "compute_ics",
@@ -46,4 +47,5 @@ __all__ = [
     "determine_budget_patch_size_map",
     "compute_budget_patch_size_map_for_image",
     "fast_adaptive_collate_fn",
+    "get_patch_signature",
 ]
