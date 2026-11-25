@@ -177,13 +177,14 @@ def _group_indices_by_signature(
     return groups
 
 
-class SignatureBatchSampler(Sampler[list[int]]):
+class ExactSignatureBatchSampler(Sampler[list[int]]):
     """
     Yield batches of dataset indices with identical token signatures.
 
     Images with identical signatures have the same token counts
-    across adaptive patch branches. Grouping them reduces unnecessary
-    padding during batching.
+    across adaptive patch branches. Grouping them eliminates
+    unnecessary padding during batching, making this sampler optimal
+    for Budget-Tiered Mode.
 
     Use as DataLoader(batch_sampler=...).
 
@@ -341,13 +342,14 @@ class SignatureBatchSampler(Sampler[list[int]]):
         )
 
 
-class ApproximateSignatureBatchSampler(Sampler[list[int]]):
+class TolerantBucketBatchSampler(Sampler[list[int]]):
     """
     Yield batches with approximately similar token signatures.
 
     Samples are first grouped by coarse signatures. Within each
     coarse group, samples are sorted by their exact signatures and
-    grouped while respecting the maximum token difference per branch.
+    grouped while respecting the maximum token difference per branch,
+    making this sampler optimal for Region-Adaptive Mode.
 
     Use as DataLoader(batch_sampler=...).
 
@@ -672,3 +674,8 @@ class ApproximateSignatureBatchSampler(Sampler[list[int]]):
                 for batch in batches
             ]
         )
+
+
+# Backward-compatibility aliases
+SignatureBatchSampler = ExactSignatureBatchSampler
+ApproximateSignatureBatchSampler = TolerantBucketBatchSampler

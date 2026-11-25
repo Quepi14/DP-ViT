@@ -17,6 +17,30 @@ from .model import DPViT
 from .patching import adaptive_collate_fn
 
 
+_MODE_ALIASES: dict[str, str] = {
+    "region_adaptive": "region_adaptive",
+    "threshold": "region_adaptive",
+    "standard": "region_adaptive",
+    "budget_tiered": "budget_tiered",
+    "tiered": "budget_tiered",
+}
+
+
+def _normalize_inference_mode(mode: str) -> str:
+    """Validate and normalize inference patch-assignment mode."""
+    if not isinstance(mode, str):
+        raise TypeError("mode must be a string.")
+
+    normalized = _MODE_ALIASES.get(mode)
+    if normalized is None:
+        raise ValueError(
+            "mode must be 'region_adaptive' or 'budget_tiered' "
+            "(legacy aliases: 'threshold', 'standard', 'tiered')."
+        )
+
+    return normalized
+
+
 def _validate_class_names(
     class_names: Sequence[str] | None,
     num_classes: int,
@@ -94,7 +118,7 @@ def predict_tensor(
     ics_calibration: ICSCalibration,
     class_names: Sequence[str] | None = None,
     normalize_fn: Callable[[Tensor], Tensor] | None = None,
-    mode: str = "threshold",
+    mode: str = "region_adaptive",
     tiers: Sequence[tuple[int, int]] = DEFAULT_TIERS,
 ) -> dict[str, Any]:
     """
@@ -110,8 +134,10 @@ def predict_tensor(
         ics_calibration: Fitted ICSCalibration instance.
         class_names: Optional sequence of class labels.
         normalize_fn: Optional channel normalization applied after ICS mapping.
-        mode: Patch assignment mode, either "threshold" or "tiered".
-        tiers: Tier definitions used when mode="tiered".
+        mode: Patch assignment mode, either "region_adaptive" or
+            "budget_tiered" (legacy aliases: "threshold", "standard",
+            "tiered").
+        tiers: Tier definitions used when mode="budget_tiered".
     """
 
     if not isinstance(model, DPViT):
@@ -122,8 +148,7 @@ def predict_tensor(
             "ics_calibration must be an ICSCalibration instance."
         )
 
-    if mode not in ("threshold", "tiered"):
-        raise ValueError("mode must be either 'threshold' or 'tiered'.")
+    normalized_mode = _normalize_inference_mode(mode)
 
     _validate_image_tensor(
         image_before_normalization,
@@ -145,7 +170,7 @@ def predict_tensor(
 
     tier_index: int | None = None
 
-    if mode == "threshold":
+    if normalized_mode == "region_adaptive":
         patch_size_map = compute_patch_size_map_for_image(
             image=image_np,
             calibration=ics_calibration,
@@ -156,7 +181,7 @@ def predict_tensor(
         if ics_calibration.detail_threshold is None:
             raise ValueError(
                 "ics_calibration.detail_threshold must be set when using "
-                "mode='tiered'."
+                "mode='budget_tiered'."
             )
 
         patch_size_map, tier_index = compute_tiered_patch_size_map_for_image(

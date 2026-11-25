@@ -1,14 +1,16 @@
 # DP-ViT
 
 DP-ViT is a PyTorch library for image classification with ICS-guided adaptive
-patch sizes. It also provides optional structured magnitude-based pruning for
-the Transformer MLP layers.
+patch sizes. It also provides signature-aware batch samplers and optional
+structured magnitude-based pruning for the Transformer MLP layers.
 
 The library provides:
 
-- Image Complexity Score (ICS) calculation and calibration
-- Adaptive patch-size mapping and patch embedding
-- A Vision Transformer classification model
+- Information Complexity Score (ICS) calculation and calibration
+- Adaptive patch-size mapping (**Region-Adaptive Mode** and **Budget-Tiered Mode**)
+- Adaptive patch embedding and collate utilities (`adaptive_collate_fn`, `fast_adaptive_collate_fn`)
+- Signature-aware batch samplers (`TolerantBucketBatchSampler`, `ExactSignatureBatchSampler`)
+- A Vision Transformer classification model (`DPViT`)
 - Optional structured MLP pruning
 - Checkpoint save and load utilities
 - Single-image inference
@@ -16,18 +18,33 @@ The library provides:
 Dataset loading, image cleaning, augmentation, normalization, and training
 loops are handled by the user.
 
-> **Status:** DP-ViT is under development. Its API may change before a stable
-> release.
+> **Status:** DP-ViT is under active development. Its API may evolve before a
+> `1.0.0` stable release.
 
 ## How it works
 
-DP-ViT divides an image into regions and assigns a patch size to each region
-using its ICS value. Regions with higher complexity receive smaller patches;
-regions with lower complexity receive larger patches.
+DP-ViT divides an image into non-overlapping regions (default `32×32`) and
+computes an Information Complexity Score (ICS) for each region. Regions with
+higher complexity receive smaller patches (`8×8`), medium complexity regions
+receive `16×16`, and simpler regions receive larger patches (`32×32`).
 
 The patches are projected into tokens and passed to a Transformer encoder.
 After training, users can optionally apply structured magnitude-based pruning
 to the MLP layers. Pruning does not automatically fine-tune the model.
+
+### Patch Assignment Modes
+
+DP-ViT supports two patch assignment modes:
+
+- **Region-Adaptive Mode (`mode="region_adaptive"`):** Evaluates each region
+  independently against global ICS thresholds (`t_low` / `t_high`, default P30
+  and P70). Ideal for maximizing fine-grained spatial detail. Best paired with
+  `TolerantBucketBatchSampler`.
+- **Budget-Tiered Mode (`mode="budget_tiered"`):** Assigns each image to a
+  fixed token-budget tier based on `detail_threshold`, then ranks regions by
+  ICS to fill the tier's exact patch quota. Produces predictable memory usage
+  and 0% padding when paired with `ExactSignatureBatchSampler`, making it ideal
+  for edge deployment.
 
 ## Optional ICS token budget
 
@@ -37,13 +54,12 @@ that keep the **average number of valid patch tokens per calibration image**
 at or below a target.
 
 This is an average over the calibration images, not a strict limit for each
-image. It also does not guarantee that the padded sequence processed by the
-encoder will be shorter than a baseline Vision Transformer.
+image.
 
 ```python
 from dp_vit import ICSConfig, fit_ics_calibration
 
-target_tokens = (224 // 16) ** 2  # 196 + 1 class token or total 197 patch tokens for a 224x224 ViT with 16x16 patches
+target_tokens = (224 // 16) ** 2  # 196 patch tokens (equivalent to a 224x224 ViT-16)
 
 ics_config = ICSConfig(
     target_mean_tokens_per_image=target_tokens,
@@ -57,11 +73,15 @@ ics_calibration = fit_ics_calibration(
     patch_sizes=(8, 16, 32),
 )
 
-print("Selected percentiles:",
-      ics_calibration.low_percentile,
-      ics_calibration.high_percentile)
-print("Estimated valid tokens per image:",
-      ics_calibration.estimated_tokens_per_image)
+print(
+    "Selected percentiles:",
+    ics_calibration.low_percentile,
+    ics_calibration.high_percentile,
+)
+print(
+    "Estimated valid tokens per image:",
+    ics_calibration.estimated_tokens_per_image,
+)
 ```
 
 ## Installation
@@ -78,16 +98,17 @@ pip install -e .
 2. Fit ICS calibration values using representative images.
 3. Calculate a patch-size map for each image before channel normalization.
 4. Normalize the image for the model, if needed.
-5. Use `adaptive_collate_fn` to create batches.
+5. Group samples using `TolerantBucketBatchSampler` (Region-Adaptive) or
+   `ExactSignatureBatchSampler` (Budget-Tiered) and collate batches with
+   `adaptive_collate_fn` or `fast_adaptive_collate_fn`.
 6. Train `DPViT` with your own training loop.
 7. Optionally prune the trained model.
 8. Save the checkpoint and use it for inference.
 
 ## Example
 
-This example shows how to create the model, prepare a batch, run a forward
-pass, and optionally prune and save the model. It does not include a training
-loop or dataset implementation.
+This example shows how to create the model, prepare a batch, and run a forward
+pass. It does not include a training loop or dataset implementation.
 
 ```python
 from functools import partial
@@ -99,12 +120,9 @@ from dp_vit import (
     DPViT,
     DPViTConfig,
     ICSConfig,
-    PruningConfig,
     adaptive_collate_fn,
     compute_patch_size_map_for_image,
     fit_ics_calibration,
-    prune_mlp_by_magnitude,
-    save_checkpoint,
 )
 
 # Each calibration image must be an RGB NumPy array with values in [0, 1].
@@ -168,7 +186,8 @@ logits = model(batch)
 targets = batch["labels"]
 ```
 
-The dataset samples passed to `adaptive_collate_fn` must have this structure:
+The dataset samples passed to `adaptive_collate_fn` or
+`fast_adaptive_collate_fn` must have this structure:
 
 ```python
 (image_tensor, patch_size_map, label)
@@ -177,38 +196,90 @@ The dataset samples passed to `adaptive_collate_fn` must have this structure:
 `image_tensor` must have shape `(3, height, width)`. The patch map must be
 computed from the RGB image before channel normalization.
 
-To avoid padding between images, use `TierBatchSampler` with tiers based on
-each image's token counts per patch size. A total token count alone may not
-avoid padding when the patch-size composition differs:
+## Signature-Aware Batch Samplers
+
+Because adaptive images have varying token counts per patch branch, naive random
+batching introduces heavy padding. Use one of the built-in batch samplers to
+minimize padding:
+
+### 1. `TolerantBucketBatchSampler` (Recommended for Region-Adaptive Mode)
+
+Groups images with similar token signatures within a configurable per-branch
+tolerance (`max_token_delta`), keeping batch sizes large while minimizing
+padding:
 
 ```python
-import numpy as np
+from functools import partial
+from torch.utils.data import DataLoader
 
-from dp_vit import TierBatchSampler
+from dp_vit import (
+    TolerantBucketBatchSampler,
+    fast_adaptive_collate_fn,
+    get_patch_signature,
+)
 
-tier_ids = {}
-tiers = []
-for _, patch_map, _ in dataset:
-    token_counts = tuple(
-        np.count_nonzero(patch_map == size)
-        * (config.region_size // size) ** 2
-        for size in config.patch_sizes
+signatures = [
+    get_patch_signature(
+        patch_map,
+        region_size=config.region_size,
+        patch_sizes=config.patch_sizes,
     )
-    tiers.append(tier_ids.setdefault(token_counts, len(tier_ids)))
+    for _, patch_map, _ in dataset
+]
+
+# Coarse bucket signatures (e.g., binned by 32 tokens per branch)
+coarse_signatures = [
+    tuple(count // 32 for count in sig) for sig in signatures
+]
+
+sampler = TolerantBucketBatchSampler(
+    signatures=signatures,
+    coarse_signatures=coarse_signatures,
+    batch_size=16,
+    max_token_delta=(32, 16, 8),
+    shuffle=True,
+    seed=0,
+)
 
 loader = DataLoader(
     dataset,
-    batch_sampler=TierBatchSampler(tiers, batch_size=2, shuffle=True, seed=0),
+    batch_sampler=sampler,
     collate_fn=partial(
-        adaptive_collate_fn,
+        fast_adaptive_collate_fn,
         region_size=config.region_size,
         patch_sizes=config.patch_sizes,
     ),
 )
 ```
 
-`batch_size` is the maximum size for each tier; the final batch in a tier may
-be smaller.
+### 2. `ExactSignatureBatchSampler` (Recommended for Budget-Tiered Mode)
+
+Groups images with identical token signatures for **0% padding**:
+
+```python
+from dp_vit import ExactSignatureBatchSampler
+
+sampler = ExactSignatureBatchSampler(
+    signatures=signatures,
+    batch_size=16,
+    shuffle=True,
+    seed=0,
+)
+
+loader = DataLoader(
+    dataset,
+    batch_sampler=sampler,
+    collate_fn=partial(
+        fast_adaptive_collate_fn,
+        region_size=config.region_size,
+        patch_sizes=config.patch_sizes,
+    ),
+)
+```
+
+> **Backward compatibility:** `SignatureBatchSampler` and
+> `ApproximateSignatureBatchSampler` remain available as aliases for
+> `ExactSignatureBatchSampler` and `TolerantBucketBatchSampler`.
 
 ## Optional pruning and checkpoint saving
 
@@ -216,6 +287,8 @@ Apply pruning after training. Evaluate the pruned model on your validation or
 test data to measure its effect.
 
 ```python
+from dp_vit import PruningConfig, prune_mlp_by_magnitude, save_checkpoint
+
 model, pruning_report = prune_mlp_by_magnitude(
     model,
     PruningConfig(target_ratio=0.2),
@@ -250,6 +323,7 @@ result = predict_tensor(
     ics_calibration=ics_calibration,
     class_names=metadata["class_names"],
     normalize_fn=None,
+    mode="region_adaptive",  # or "budget_tiered"
 )
 
 print(result["class_name"])
@@ -270,13 +344,14 @@ DP-ViT/
 └── src/
     └── dp_vit/
         ├── __init__.py
+        ├── batching.py
+        ├── checkpoint.py
         ├── config.py
         ├── ics.py
-        ├── patching.py
+        ├── inference.py
         ├── model.py
-        ├── pruning.py
-        ├── checkpoint.py
-        └── inference.py
+        ├── patching.py
+        └── pruning.py
 ```
 
 ## Scope

@@ -2,7 +2,9 @@
 
 from .batching import (
     ApproximateSignatureBatchSampler,
+    ExactSignatureBatchSampler,
     SignatureBatchSampler,
+    TolerantBucketBatchSampler,
 )
 
 from .checkpoint import (
@@ -55,10 +57,12 @@ __all__ = [
     "DEFAULT_TIERS",
     "DPViT",
     "DPViTConfig",
+    "ExactSignatureBatchSampler",
     "ICSCalibration",
     "ICSConfig",
     "PruningConfig",
     "SignatureBatchSampler",
+    "TolerantBucketBatchSampler",
     "adaptive_collate_fn",
     "compute_budget_patch_size_map_for_image",
     "compute_gradient_magnitude",
